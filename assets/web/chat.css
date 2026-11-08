@@ -1,0 +1,57 @@
+/* Claude-app palette, mirrors ClaudeStyle in main.swift. */
+:root {
+  color-scheme: light dark;
+  --text: #3D3D3A; --muted: #73736E; --bubble: #F0EEE6; --code: #F0EEE6;
+  --line: rgba(31, 30, 29, .12); --clay: #D97757; --error: #C0392B;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --text: #C2C0B6; --muted: #B3B0A8; --bubble: #3D3D3A; --code: #262624;
+          --line: rgba(255, 255, 255, .10); --error: #E8796B; }
+}
+html, body { margin: 0; background: transparent; }
+body { padding: 12px; color: var(--text); font: 12.5px/1.45 -apple-system, system-ui, sans-serif;
+       overflow-wrap: anywhere; -webkit-font-smoothing: antialiased; }
+#empty { color: var(--muted); font-size: 12px; text-align: center; padding-top: 40px; }
+#log > * + * { margin-top: 8px; }
+
+.user { display: flex; justify-content: flex-end; padding-left: 40px; }
+.user > div { background: var(--bubble); border-radius: 12px; padding: 7px 10px; white-space: pre-wrap; }
+.tool { color: var(--muted); font: 10.5px/1.35 ui-monospace, Menlo, monospace;
+        display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.tool::before { content: "› "; color: var(--clay); }
+.error { color: var(--error); font-size: 11px; white-space: pre-wrap; }
+.error::before { content: "⚠ "; }
+.info { color: var(--muted); font-size: 11px; }
+
+.assistant > :first-child { margin-top: 0; }
+.assistant > :last-child { margin-bottom: 0; }
+.assistant p, .assistant ul, .assistant ol, .assistant pre, .assistant table, .assistant blockquote { margin: 6px 0; }
+.assistant ul, .assistant ol { padding-left: 20px; }
+.assistant h1, .assistant h2, .assistant h3, .assistant h4 { margin: 10px 0 4px; font-weight: 600; line-height: 1.25; }
+.assistant h1 { font-size: 15px; } .assistant h2 { font-size: 14px; }
+.assistant h3, .assistant h4 { font-size: 13px; }
+.assistant a { color: var(--clay); }
+.assistant blockquote { padding-left: 10px; border-left: 2px solid var(--line); color: var(--muted); }
+.assistant hr { border: 0; border-top: 1px solid var(--line); margin: 10px 0; }
+.assistant code { font: 11.5px ui-monospace, Menlo, monospace; background: var(--code); border-radius: 4px; padding: 1px 4px; }
+.assistant pre { background: var(--code); border-radius: 8px; padding: 8px 10px; overflow-x: auto; }
+.assistant pre code { background: none; padding: 0; overflow-wrap: normal; }
+.assistant table { display: block; overflow-x: auto; border-collapse: collapse; }
+.assistant th, .assistant td { border: 1px solid var(--line); padding: 3px 7px; overflow-wrap: normal; }
+
+.katex { font-size: 1.12em; overflow-wrap: normal; }
+.katex-display { margin: 8px 0; padding: 2px 0; overflow-x: auto; overflow-y: hidden; }
+
+.picture { display: block; margin: 8px 0; }
+.picture img { display: block; max-width: 100%; max-height: 420px; border-radius: 8px;
+               background: #fff; /* transparent plots stay readable in dark mode */
+               border: 0.5px solid var(--line); }
+.user .picture { margin: 1px 0 5px; }
+.user .picture:last-child { margin-bottom: 1px; }
+.user .picture img { max-height: 180px; }
+.missing { color: var(--muted); font-size: 11px; }
+
+#spinner { width: 12px; height: 12px; margin-top: 10px; border-radius: 50%;
+           border: 2px solid var(--line); border-top-color: var(--clay); animation: spin .8s linear infinite; }
+#spinner[hidden] { display: none; }
+@keyframes spin { to { transform: rotate(360deg); } }
