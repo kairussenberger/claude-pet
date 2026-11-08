@@ -4,8 +4,9 @@ import SwiftUI
 import UniformTypeIdentifiers
 import WebKit
 
-struct ChatLine: Identifiable {
-    enum Kind: String { case user, assistant, tool, error, info }
+struct ChatLine: Identifiable, Codable {
+    enum Kind: String, Codable { case user, assistant, tool, error, info }
+    enum CodingKeys: String, CodingKey { case kind, text, images }   // ids are per-launch only
     let id = UUID()
     let kind: Kind
     var text: String

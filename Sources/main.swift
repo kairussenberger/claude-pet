@@ -14,10 +14,15 @@ final class ClaudeSession: ObservableObject {
     @Published var mood: Mood = .idle
     @Published var workDir: URL
     @Published var lastReply = ""
+    @Published var history: [ChatMeta] = ChatStore.index()
+    @Published var showingHistory = false
 
     enum Mood { case idle, thinking, happy, sad }
 
     private(set) var sessionId: String?
+    private(set) var chatId: String?        // this chat's entry in ChatStore, once saved
+    private var savedCount = 0
+    private var generation = 0              // bumped when a run is abandoned, so its late output is dropped
     private var process: Process?
     private var buffer = Data()
 
@@ -72,10 +77,43 @@ final class ClaudeSession: ObservableObject {
     }
 
     func newChat() {
+        saveChat()
         stop()
+        if running { generation += 1; running = false; process = nil; mood = .idle }
         sessionId = nil
+        chatId = nil
+        savedCount = 0
         lines = []
         lastReply = ""
+    }
+
+    /// Reopen a past chat: its transcript, folder and Claude session, so the next message resumes it.
+    func open(_ meta: ChatMeta) {
+        showingHistory = false
+        guard meta.id != chatId else { return }
+        newChat()
+        workDir = URL(fileURLWithPath: meta.workDir)
+        UserDefaults.standard.set(meta.workDir, forKey: "workDir")
+        sessionId = meta.sessionId
+        chatId = meta.id
+        lines = ChatStore.lines(meta.id)
+        savedCount = lines.count
+        lastReply = lines.last { $0.kind == .assistant }?.text ?? ""
+    }
+
+    func deleteChat(_ meta: ChatMeta) {
+        if meta.id == chatId { chatId = nil; savedCount = lines.count }   // keep it on screen, just forget it
+        history = ChatStore.delete(meta.id)
+    }
+
+    /// Saves the transcript if it has a Claude session and changed since the last save.
+    func saveChat() {
+        guard let sid = sessionId, lines.count != savedCount, lines.contains(where: { $0.kind == .user }) else { return }
+        let id = chatId ?? UUID().uuidString
+        chatId = id
+        let meta = ChatMeta(id: id, sessionId: sid, workDir: workDir.path, title: ChatStore.title(for: lines), updated: Date())
+        history = ChatStore.save(meta, lines: lines)
+        savedCount = lines.count
     }
 
     static func claudePath() -> String? {
@@ -124,16 +162,19 @@ final class ClaudeSession: ObservableObject {
         p.standardOutput = out
         p.standardError = err
         buffer = Data()
+        let gen = generation
 
         out.fileHandleForReading.readabilityHandler = { [weak self] h in
             let chunk = h.availableData
             guard !chunk.isEmpty else { return }
-            Task { @MainActor in self?.ingest(chunk) }
+            Task { @MainActor in if self?.generation == gen { self?.ingest(chunk) } }
         }
         p.terminationHandler = { [weak self] proc in
             let errText = String(data: err.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
             out.fileHandleForReading.readabilityHandler = nil
-            Task { @MainActor in self?.finished(status: proc.terminationStatus, stderr: errText) }
+            Task { @MainActor in
+                if self?.generation == gen { self?.finished(status: proc.terminationStatus, stderr: errText) }
+            }
         }
 
         do {
@@ -211,6 +252,7 @@ final class ClaudeSession: ObservableObject {
                                text: e.isEmpty ? "Stopped (exit \(status))." : e))
             mood = .sad
         }
+        saveChat()
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
             if self?.running == false { self?.mood = .idle }
         }
@@ -541,14 +583,24 @@ struct ChatView: View {
         VStack(spacing: 0) {
             header
             Divider().opacity(0.4)
-            transcript
-            if !session.attachments.isEmpty { attachmentRow }
-            inputRow
+            ZStack {
+                VStack(spacing: 0) {
+                    transcript
+                    if !session.attachments.isEmpty { attachmentRow }
+                    inputRow
+                }
+                if session.showingHistory {
+                    HistoryList(session: session)
+                        .background(ClaudeStyle.surface)
+                }
+            }
         }
-        .frame(width: 380, height: 440)
+        .frame(minWidth: ResizeHandle.minSize.width, maxWidth: .infinity,
+               minHeight: ResizeHandle.minSize.height, maxHeight: .infinity)
         .background(ClaudeStyle.surface, in: RoundedRectangle(cornerRadius: 16))
         .overlay(RoundedRectangle(cornerRadius: 16)
             .strokeBorder(dropHover ? ClaudeStyle.clay : ClaudeStyle.hairline, lineWidth: dropHover ? 2 : 0.5))
+        .overlay(ResizeEdges())
         .foregroundStyle(ClaudeStyle.text)
         .tint(ClaudeStyle.clay)
         .onDrop(of: [.fileURL], isTargeted: $dropHover) { providers in
@@ -574,8 +626,13 @@ struct ChatView: View {
             Spacer()
             Button { session.openInTerminal() } label: { Image(systemName: "terminal") }
                 .buttonStyle(.plain).help("Continue in iTerm")
-            Button { session.newChat() } label: { Image(systemName: "square.and.pencil") }
+            Button { session.showingHistory = false; session.newChat() } label: { Image(systemName: "square.and.pencil") }
                 .buttonStyle(.plain).help("New conversation")
+            Button { session.showingHistory.toggle() } label: {
+                Image(systemName: "list.bullet")
+                    .foregroundStyle(session.showingHistory ? ClaudeStyle.clay : ClaudeStyle.text)
+            }
+            .buttonStyle(.plain).help(session.showingHistory ? "Back to chat" : "Past chats")
         }
         .padding(.horizontal, 12).padding(.vertical, 9)
     }
@@ -674,7 +731,8 @@ final class FloatingPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
 
-    init(content: some View) {
+    /// fitsContent: the window takes the SwiftUI content's size; otherwise the content fills the window.
+    init(content: some View, fitsContent: Bool = true) {
         super.init(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         isOpaque = false
         backgroundColor = .clear
@@ -683,9 +741,9 @@ final class FloatingPanel: NSPanel {
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         isReleasedWhenClosed = false
         let host = NSHostingView(rootView: content)
-        host.sizingOptions = [.intrinsicContentSize]
+        host.sizingOptions = fitsContent ? [.intrinsicContentSize] : []
         contentView = host
-        setContentSize(host.fittingSize)
+        setContentSize(fitsContent ? host.fittingSize : NSSize(width: 380, height: 440))
     }
 }
 
@@ -699,8 +757,13 @@ final class PetApp: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ note: Notification) {
         petWindow = FloatingPanel(content: RootView(session: session))
-        chatWindow = FloatingPanel(content: ChatView(session: session))
+        chatWindow = FloatingPanel(content: ChatView(session: session), fitsContent: false)
         chatWindow.hasShadow = true
+        if let s = UserDefaults.standard.string(forKey: "chatSize") {
+            let size = NSSizeFromString(s)
+            chatWindow.setContentSize(NSSize(width: max(size.width, ResizeHandle.minSize.width),
+                                             height: max(size.height, ResizeHandle.minSize.height)))
+        }
 
         if let s = UserDefaults.standard.string(forKey: "petOrigin") {
             petWindow.setFrameOrigin(NSPointFromString(s))
@@ -721,6 +784,7 @@ final class PetApp: NSObject, NSApplicationDelegate {
             let handled = MainActor.assumeIsolated {
                 let app = PetApp.shared
                 guard app.session.chatOpen else { return false }
+                if !isPaste, app.session.showingHistory { app.session.showingHistory = false; return true }
                 if isPaste {
                     let files = ChatImages.pastedFiles(from: .general)
                     app.session.attach(files)
@@ -778,6 +842,8 @@ final class PetApp: NSObject, NSApplicationDelegate {
         return m
     }
 
+    func applicationWillTerminate(_ note: Notification) { session.saveChat() }
+
     @objc func toggleChatAction() { toggleChat() }
     @objc func newChatAction() { session.newChat() }
     @objc func workDirAction() { pickWorkDir() }
@@ -811,6 +877,7 @@ final class PetApp: NSObject, NSApplicationDelegate {
 
     func hideChat() {
         session.chatOpen = false
+        session.showingHistory = false
         petWindow.removeChildWindow(chatWindow)
         chatWindow.orderOut(nil)
     }
@@ -824,6 +891,16 @@ final class PetApp: NSObject, NSApplicationDelegate {
         if x < vf.minX { x = pet.maxX - 10 }
         var y = pet.minY + 20
         y = min(max(y, vf.minY), vf.maxY - size.height)
+        chatWindow.setFrameOrigin(NSPoint(x: x, y: y))
+    }
+
+    /// Remembers the size the chat was dragged to, keeping it on screen and beside the pet.
+    func chatResized() {
+        UserDefaults.standard.set(NSStringFromSize(chatWindow.frame.size), forKey: "chatSize")
+        let f = chatWindow.frame
+        let vf = (chatWindow.screen ?? NSScreen.main)?.visibleFrame ?? f
+        let y = min(max(f.minY, vf.minY), vf.maxY - f.height)
+        let x = min(max(f.minX, vf.minX), vf.maxX - f.width)
         chatWindow.setFrameOrigin(NSPoint(x: x, y: y))
     }
 
