@@ -54,9 +54,10 @@ final class ClaudeSession: ObservableObject {
             writing the path as <path> inside the parentheses if it contains spaces. It appears right in the chat, \
             so do not wrap it in a PDF or open it in another app.
             - Only produce a PDF when the user explicitly asks for one.
-            - Screen: when a request needs context the user has not given, such as "this", "that error", \
-            "what does this mean" or "fix it", and the conversation, attached files and working directory \
-            do not settle it, \(howToLook)
+            - Screen: whenever you are missing context the user has not given, such as "this", "that error", \
+            "what does this mean" or "fix it", or they mention an image, photo, snapshot, screenshot, board or \
+            sheet that is not attached, and the conversation, attached files and working directory do not \
+            settle it, \(howToLook)
             """
     }
 
