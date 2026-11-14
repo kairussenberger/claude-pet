@@ -16,6 +16,8 @@ final class ClaudeSession: ObservableObject {
     @Published var lastReply = ""
     @Published var history: [ChatMeta] = ChatStore.index()
     @Published var showingHistory = false
+    /// Tasks Claude started with run_in_background (shells, agents), from stream-json `background_tasks_changed`.
+    @Published var backgroundTasks: [String] = []
 
     enum Mood { case idle, thinking, happy, sad }
 
@@ -35,8 +37,19 @@ final class ClaudeSession: ObservableObject {
         let howToLook = screenAllowed ? """
             look at their screen before you answer or ask them anything: run \
             `rm -rf \(screenDir) && mkdir -p \(screenDir) && cd \(screenDir) && screencapture -x \(shots)`, \
-            then Read each screen-N.png in that folder that exists (one per connected display). Capture again for every \
-            new request, since the screen changes. The small chat panel and the cartoon pet are this app, \
+            then Read EVERY screen-N.png in that folder that exists (one per connected display) and check all of them, \
+            not just the first, before deciding what the user means. Always capture fresh: never rely on earlier \
+            screenshots, older captures in this conversation or anything you remember about the screen, because \
+            windows change between messages; capture again for every new request and after you change anything. \
+            Be thorough: if the thing you need is cut off, only partly visible or likely continues (a long page, \
+            document, PDF, code file, chat or terminal), scroll it yourself and capture again until you have seen \
+            all of it. To scroll, bring that app to the front and page down, e.g. \
+            `osascript -e 'tell application "Preview" to activate' -e 'delay 0.4' -e 'tell application "System Events" to key code 121'` \
+            (121 = Page Down, 116 = Page Up, 119 = End), then capture again; repeat until the end of what matters. \
+            Never send keys without activating the target app first, or they land in this chat panel. If the shown \
+            content has a source you can read directly (a file path in a title bar, a PDF, a URL), read that too. \
+            If osascript says it is not allowed to send keystrokes, tell the user to allow Claude Pet under \
+            System Settings > Privacy & Security > Accessibility, and say what was cut off. The small chat panel and the cartoon pet are this app, \
             so ignore them. Mention briefly what you saw. Do not capture for self-contained requests.
             """ : """
             you would normally look at their screen, but Screen Recording permission is missing. Do not try \
@@ -86,6 +99,7 @@ final class ClaudeSession: ObservableObject {
         savedCount = 0
         lines = []
         lastReply = ""
+        backgroundTasks = []
     }
 
     /// Reopen a past chat: its transcript, folder and Claude session, so the next message resumes it.
@@ -220,6 +234,19 @@ final class ClaudeSession: ObservableObject {
                 default: break
                 }
             }
+        case "system":
+            switch ev["subtype"] as? String {
+            case "background_tasks_changed":
+                let tasks = ev["tasks"] as? [[String: Any]] ?? []
+                backgroundTasks = tasks.map { ($0["description"] as? String) ?? ($0["task_type"] as? String) ?? "task" }
+            case "task_started" where ev["is_backgrounded"] as? Bool == true:
+                lines.append(.init(kind: .info, text: "⏳ In background: \(ev["description"] as? String ?? "task")"))
+            case "task_notification":
+                let status = ev["status"] as? String ?? "finished"
+                let what = (ev["description"] as? String) ?? (ev["summary"] as? String) ?? "Background task"
+                lines.append(.init(kind: .info, text: "\(status == "completed" ? "✅" : "⚠️") \(what): \(status)"))
+            default: break
+            }
         case "result":
             if ev["is_error"] as? Bool == true {
                 let msg = ev["result"] as? String ?? (ev["subtype"] as? String ?? "error")
@@ -247,6 +274,7 @@ final class ClaudeSession: ObservableObject {
         if !buffer.isEmpty { ingest(Data([0x0A])) }
         running = false
         process = nil
+        backgroundTasks = []
         if status != 0 && mood != .sad {
             let e = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
             lines.append(.init(kind: status == 2 || status == 130 || status == 15 ? .info : .error,
@@ -307,12 +335,19 @@ struct PetView: View {
                         .offset(x: 50, y: -8)
                         .transition(.scale.combined(with: .opacity))
                 }
+
+                if !session.backgroundTasks.isEmpty {
+                    BackgroundBadge(tasks: session.backgroundTasks, t: t)
+                        .offset(x: -48, y: 4)
+                        .transition(.scale.combined(with: .opacity))
+                }
             }
         }
         .animation(.spring(response: 0.3, dampingFraction: 0.5), value: hop)
         .animation(.spring(response: 0.25, dampingFraction: 0.45), value: squish)
         .animation(.spring(response: 0.3), value: dropHover)
         .animation(.easeInOut(duration: 0.2), value: session.mood)
+        .animation(.spring(response: 0.3), value: session.backgroundTasks)
         .overlay(DragHandle(onClick: poke))
         .onDrop(of: [.fileURL], isTargeted: $dropHover) { providers in
             loadFiles(providers) { session.attach($0); celebrate() }
@@ -407,6 +442,25 @@ struct MoodBubble: View {
         .foregroundStyle(.black)
         .padding(.horizontal, 8).padding(.vertical, 5)
         .background(Capsule().fill(.white).shadow(color: .black.opacity(0.25), radius: 3, y: 1))
+    }
+}
+
+/// Shown while Claude has tasks running in the background (run_in_background shells, background agents):
+/// a spinning gear with the task count; hover for what they are.
+struct BackgroundBadge: View {
+    let tasks: [String]
+    let t: Double
+    var body: some View {
+        HStack(spacing: 3) {
+            Image(systemName: "gearshape.fill")
+                .font(.system(size: 11, weight: .bold))
+                .rotationEffect(.degrees(t * 90))
+            Text("\(tasks.count)").font(.system(size: 11, weight: .heavy))
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 7).padding(.vertical, 4)
+        .background(Capsule().fill(Color.purple).shadow(color: .black.opacity(0.25), radius: 3, y: 1))
+        .help("Running in background:\n" + tasks.map { "• " + $0 }.joined(separator: "\n"))
     }
 }
 
@@ -615,6 +669,12 @@ struct ChatView: View {
     private var header: some View {
         HStack(spacing: 8) {
             Circle().fill(session.running ? .orange : .green).frame(width: 7, height: 7)
+            if !session.backgroundTasks.isEmpty {
+                Label("\(session.backgroundTasks.count) in background", systemImage: "gearshape.2.fill")
+                    .font(.system(size: 10, weight: .semibold)).foregroundStyle(.purple)
+                    .lineLimit(1).fixedSize()
+                    .help(session.backgroundTasks.joined(separator: "\n"))
+            }
             Button {
                 PetApp.shared.pickWorkDir()
             } label: {

@@ -24,7 +24,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleShortVersionString</key><string>1.0</string>
   <key>LSUIElement</key><true/>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
-  <key>NSAppleEventsUsageDescription</key><string>Opens your Claude conversation in iTerm.</string>
+  <key>NSAppleEventsUsageDescription</key><string>Opens your Claude conversation in iTerm and lets Claude scroll windows it is reading.</string>
 </dict></plist>
 PLIST
 # Pin the requirement to the bundle ID: the default ad-hoc one is the build's hash, so macOS
